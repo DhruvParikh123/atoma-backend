@@ -1,0 +1,103 @@
+version: '3.8'
+
+services:
+  db:
+    image: postgres:15-alpine
+    volumes:
+      - postgres_data:/var/lib/postgresql/data/
+    environment:
+      POSTGRES_DB: atoma_db
+      POSTGRES_USER: atoma_user
+      POSTGRES_PASSWORD: atoma_password
+    ports:
+      - "5432:5432"
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U atoma_user -d atoma_db"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+
+  redis:
+    image: redis:7-alpine
+    ports:
+      - "6379:6379"
+    volumes:
+      - redis_data:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 5
+
+  web:
+    build: .
+    command: >
+      sh -c "python manage.py migrate &&
+             python manage.py collectstatic --noinput &&
+             gunicorn atoma.wsgi:application --bind 0.0.0.0:8000 --workers 4 --timeout 120"
+    volumes:
+      - .:/app
+      - static_volume:/app/staticfiles
+      - media_volume:/app/media
+    ports:
+      - "8000:8000"
+    environment:
+      DEBUG: "False"
+      SECRET_KEY: ${SECRET_KEY:-django-insecure-change-this-in-production}
+      ALLOWED_HOSTS: ${ALLOWED_HOSTS:-localhost,127.0.0.1,0.0.0.0}
+      DB_NAME: atoma_db
+      DB_USER: atoma_user
+      DB_PASSWORD: atoma_password
+      DB_HOST: db
+      DB_PORT: 5432
+      REDIS_URL: redis://redis:6379/0
+      USE_SQLITE: "False"
+    depends_on:
+      db:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+
+  # Optional: Celery worker for async tasks
+  celery:
+    build: .
+    command: celery -A atoma worker --loglevel=info
+    volumes:
+      - .:/app
+    environment:
+      DEBUG: "False"
+      SECRET_KEY: ${SECRET_KEY:-django-insecure-change-this-in-production}
+      DB_NAME: atoma_db
+      DB_USER: atoma_user
+      DB_PASSWORD: atoma_password
+      DB_HOST: db
+      DB_PORT: 5432
+      REDIS_URL: redis://redis:6379/0
+    depends_on:
+      - db
+      - redis
+
+  # Optional: Celery beat for scheduled tasks
+  celery-beat:
+    build: .
+    command: celery -A atoma beat --loglevel=info
+    volumes:
+      - .:/app
+    environment:
+      DEBUG: "False"
+      SECRET_KEY: ${SECRET_KEY:-django-insecure-change-this-in-production}
+      DB_NAME: atoma_db
+      DB_USER: atoma_user
+      DB_PASSWORD: atoma_password
+      DB_HOST: db
+      DB_PORT: 5432
+      REDIS_URL: redis://redis:6379/0
+    depends_on:
+      - db
+      - redis
+
+volumes:
+  postgres_data:
+  redis_data:
+  static_volume:
+  media_volume:
